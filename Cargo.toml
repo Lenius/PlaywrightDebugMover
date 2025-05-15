@@ -1,0 +1,25 @@
+[package]
+name = "PlaywrightDebugMover"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+windows = { version = "0.57", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug"
+] }
+crossbeam-channel = "0.5"
+ctrlc = "3.4"
+widestring = "1.0"
+tiny_http = "0.12"
+
+[profile.release]
+strip = true
+opt-level = "z"
+panic = "abort"
+
+[package.metadata.winres]
+windows_subsystem = "windows"
