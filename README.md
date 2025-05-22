@@ -55,12 +55,17 @@ target/release/PlaywrightDebugMover.exe
 - The app will monitor for Playwright debug windows.
 - Matching windows will be repositioned automatically to the top-right corner of the screen.
 
-### Stopping the program
+### StoUsingpping the program
 
-- Go to [http://localhost:8080](http://localhost:8080)
-- Click the **“Stop program”** button  
+- Go to [http://localhost:5000](http://localhost:5000)
+- Click the **Start** button  
+  → The program will start looking for Playwright Debug window
+- Click the **Stop** button  
+  → The program will stop lokking for Playwright Debug window
+- Click the **“Kill”** button  
   → The program will shut down cleanly
-
+- Click the **Template** button  
+  → The program generates a template file
 ---
 
 ## 🧪 Development tips
