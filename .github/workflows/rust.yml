@@ -23,8 +23,10 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - name: Zip release files
-        run: zip PlaywrightDebugMover.zip target/release/PlaywrightDebugMover.exe templates/test.spec.ts
+      - name: Zip release files (Windows)
+        shell: pwsh
+        run: Compress-Archive -Path target/release/PlaywrightDebugMover.exe, templates/test.spec.ts -DestinationPath PlaywrightDebugMover.zip
+
 
       - name: Upload artifact to release
         uses: softprops/action-gh-release@v1
