@@ -10,7 +10,7 @@
 - ✅ Ensures only one instance runs at a time
 - ✅ Monitors for visible windows with titles starting with `"Playwright"`
 - ✅ Moves matching windows to the top-right corner of the screen
-- ✅ Built-in web interface to stop the program via browser (`http://localhost:8080`)
+- ✅ Built-in web interface to stop the program via browser (`http://localhost:5000`)
 
 ---
 
@@ -55,7 +55,7 @@ target/release/PlaywrightDebugMover.exe
 - The app will monitor for Playwright debug windows.
 - Matching windows will be repositioned automatically to the top-right corner of the screen.
 
-### StoUsingpping the program
+### Using the program
 
 - Go to [http://localhost:5000](http://localhost:5000)
 - Click the **Start** button  
