@@ -2,25 +2,35 @@
 //! - Starter skjult (uden konsolvindue)
 //! - Sikrer at kun én instans kører via named mutex
 //! - Lytter efter "Playwright"-vinduer og flytter dem til højre hjørne
-//! - Har en indbygget webserver hvor man kan lukke programmet via browser
+//! - Har en indbygget Axum-webserver med /start, /stop og /kill endpoints
 
 #![windows_subsystem = "windows"]
 
-use std::{collections::HashSet, ffi::OsString, os::windows::ffi::OsStringExt, thread, time::Duration};
-use crossbeam_channel::{bounded, select};
+use std::{collections::HashSet, ffi::OsString, net::SocketAddr, os::windows::ffi::OsStringExt, sync::{Arc, Mutex}, thread, time::Duration};
+use realtime::notify_session;
 use widestring::U16CString;
-use tiny_http::{Server, Response, Header};
-
 use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{BOOL, HWND, LPARAM, RECT, GetLastError},
     System::Threading::CreateMutexW,
     UI::WindowsAndMessaging::{
         EnumWindows, GetSystemMetrics, GetWindowRect, GetWindowTextW, IsWindowVisible,
-        MoveWindow, ShowWindow, SystemParametersInfoW, SPI_GETWORKAREA, SM_CXSCREEN,
-        SW_SHOWMINNOACTIVE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+        MoveWindow, ShowWindow, SPI_GETWORKAREA, SM_CXSCREEN, SW_SHOWMINNOACTIVE,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     },
 };
+use crossbeam_channel::{Receiver, Sender, select};
+use axum::{response::{Html}, routing::get, Router};
+
+struct AppState {
+    watcher: Option<thread::JoinHandle<()>>,
+    stop_tx: Option<Sender<()>>,
+}
+
+mod realtime;
+mod tool;
+
+type SharedState = Arc<Mutex<AppState>>;
 
 fn get_window_text(hwnd: HWND) -> Option<String> {
     let mut buf = [0u16; 256];
@@ -35,7 +45,7 @@ fn get_window_text(hwnd: HWND) -> Option<String> {
 fn get_work_area() -> RECT {
     let mut rect = RECT::default();
     unsafe {
-        let _ = SystemParametersInfoW(
+        let _ = windows::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
             SPI_GETWORKAREA,
             0,
             Some(&mut rect as *mut _ as *mut _),
@@ -51,31 +61,9 @@ fn move_to_top_right(hwnd: HWND, rect: RECT) {
     let height = work_area.bottom - work_area.top;
     let x = unsafe { GetSystemMetrics(SM_CXSCREEN) } - width;
     let y = work_area.top;
-
     unsafe {
         let _ = MoveWindow(hwnd, x, y, width, height, true);
     }
-}
-
-fn start_watcher_thread(stop_rx: crossbeam_channel::Receiver<()>) {
-    thread::spawn(move || {
-        let mut moved_windows = HashSet::<isize>::new();
-
-        loop {
-            select! {
-                recv(stop_rx) -> _ => {
-                    println!("Watcher stopper...");
-                    break;
-                },
-                default() => {
-                    unsafe {
-                        let _ = EnumWindows(Some(enum_windows_proc), LPARAM(&mut moved_windows as *mut _ as isize));
-                    }
-                    thread::sleep(Duration::from_secs(1));
-                }
-            }
-        }
-    });
 }
 
 extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -83,85 +71,113 @@ extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if !IsWindowVisible(hwnd).as_bool() {
             return true.into();
         }
-
         if let Some(title) = get_window_text(hwnd) {
             if title.starts_with("Playwright") {
-                let moved_windows = &mut *(lparam.0 as *mut HashSet<isize>);
-                if !moved_windows.contains(&hwnd.0) {
+                let moved = &mut *(lparam.0 as *mut HashSet<isize>);
+                if !moved.contains(&hwnd.0) {
+                    notify_session("service", "fundet");
                     let mut rect = RECT::default();
                     let _ = GetWindowRect(hwnd, &mut rect);
                     move_to_top_right(hwnd, rect);
-                    moved_windows.insert(hwnd.0);
+                    moved.insert(hwnd.0);
                 }
+                // Stop enumeration for this cycle
                 return false.into();
             }
         }
-
         true.into()
     }
 }
 
-fn main() {
+fn watcher_loop(stop_rx: Receiver<()>) {
+    let mut moved_windows = HashSet::<isize>::new();
+    loop {
+        select! {
+            recv(stop_rx) -> _ => break,
+            default() => {
+                unsafe {
+                    let _ = EnumWindows(Some(enum_windows_proc), LPARAM(&mut moved_windows as *mut _ as isize));
+                }
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+}
+
+async fn handler_root() -> Html<&'static str> {
+    Html(r#"
+        <html>
+        <body>
+        <h1>PW Mover</h1>
+        <div>
+          <button onclick="wsCmd('start')">Start</button>
+          <button onclick="wsCmd('stop')">Stop</button>
+          <button onclick="wsCmd('kill')">Kill</button>
+          <button onclick="wsCmd('template')">Template</button>
+          <div id="ws-status" style="margin-top:12px;color:#296;">
+            Status: <span id="ws-connected">forbinder...</span>
+          </div>
+          <div id="ws-response" style="margin-top:12px;color:#962;"></div>
+        </div>
+        <hr>
+        <script>
+        let ws;
+        function wsConnect() {
+          ws = new WebSocket("ws://"+location.host+"/ws");
+          ws.onopen = () => {
+            document.getElementById('ws-connected').innerText = "tilsluttet";
+          };
+          ws.onclose = () => {
+            document.getElementById('ws-connected').innerText = "afbrudt – prøver igen om lidt...";
+            setTimeout(wsConnect, 1500);
+          };
+          ws.onmessage = (ev) => {
+            document.getElementById('ws-response').innerText = ev.data;
+          };
+        }
+        function wsCmd(cmd) {
+          if (ws && ws.readyState === 1) {
+            ws.send(cmd);
+          }
+        }
+        wsConnect();
+        </script>
+        </body>
+        </html>
+    "#)
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt::init();
+
+    realtime::init_broadcaster();
+
+    // Sikr. kun én instans via mutex
     let name = U16CString::from_str("Global\\PlaywrightMoverMutex").unwrap();
     let name_ptr = PCWSTR::from_raw(name.as_ptr());
-    let _mutex = unsafe {
-        CreateMutexW(None, false, name_ptr)
-    };
+    let _mx = unsafe { CreateMutexW(None, false, name_ptr) };
     if unsafe { GetLastError().0 } == 183 {
-        println!("Programmet kører allerede.");
         return;
     }
 
-    unsafe {
-        let _ = ShowWindow(HWND(0), SW_SHOWMINNOACTIVE);
-    }
+    // Skjul konsolvinduet
+    unsafe { let _ = ShowWindow(HWND(0), SW_SHOWMINNOACTIVE); }
 
-    let (stop_tx, stop_rx) = bounded::<()>(1);
-    start_watcher_thread(stop_rx.clone());
+    // Init delt state
+    let state = Arc::new(Mutex::new(AppState { watcher: None, stop_tx: None }));
 
-    {
-        let stop_tx = stop_tx.clone();
-        thread::spawn(move || {
-            let server = Server::http("127.0.0.1:8080").expect("Kan ikke starte webserver");
-            for req in server.incoming_requests() {
-                if req.url().starts_with("/stop") {
-                    println!("Stop-request modtaget fra browser");
-                    let _ = req.respond(Response::from_string("Programmet stoppes..."));
-                    let _ = stop_tx.send(());
-                    thread::sleep(Duration::from_millis(200));
-                    std::process::exit(0);
-                }
+    // Byg Axum-router
+    let app = Router::new()
+        .route("/", get(handler_root))
+        .route("/ws", get(realtime::ws_handler)) //handle_ws
+        .with_state(state);
 
-                let html = r#"
-                    <html><body>
-                    <h1>PW Mover running</h1>
-                    <form method='GET' action='/stop'>
-                        <button type='submit'>Stop programmet</button>
-                    </form>
-                    </body></html>
-                "#;
+    // Kør server
 
-                let response = Response::from_string(html)
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap());
-                let _ = req.respond(response);
-            }
-        });
-    }
+    let addr = SocketAddr::from(([0, 0, 0, 0], 5000));
 
-    ctrlc::set_handler(move || {
-        println!("Ctrl+C modtaget – lukker...");
-        let _ = stop_tx.send(());
-    }).expect("Kunne ikke opsætte Ctrl+C handler");
-
-    println!("PW Mover kører. Besøg http://localhost:8080 for at stoppe det.");
-
-    loop {
-        if let Ok(_) = stop_rx.try_recv() {
-            println!("Stop-signal modtaget – program lukker.");
-            break;
-        }
-        thread::sleep(Duration::from_millis(200));
-    }
-
-    println!("Program stoppet.");
+    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app.into_make_service())
+        .await
+        .unwrap();
 }

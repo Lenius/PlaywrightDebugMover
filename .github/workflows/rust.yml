@@ -26,6 +26,9 @@ jobs:
       - name: Upload artifact to release
         uses: softprops/action-gh-release@v1
         with:
-          files: target/release/PlaywrightDebugMover.exe
+          files: |
+            target/release/PlaywrightDebugMover.exe
+            templates/test.spec.ts
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
