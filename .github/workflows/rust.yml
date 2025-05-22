@@ -23,12 +23,13 @@ jobs:
       - name: Build release
         run: cargo build --release
 
+      - name: Zip release files
+        run: zip PlaywrightDebugMover.zip target/release/PlaywrightDebugMover.exe templates/test.spec.ts
+
       - name: Upload artifact to release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            target/release/PlaywrightDebugMover.exe
-            templates/test.spec.ts
+          files: PlaywrightDebugMover.zip
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

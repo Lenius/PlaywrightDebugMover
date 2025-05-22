@@ -21,7 +21,6 @@ pub fn generate_playwright_spec<P: AsRef<Path>>(
 
     // Prøv at læse template fra disk, ellers brug indbygget
     let template_content = if user_template_path.exists() {
-        append_log("custom template fundet");
         fs::read_to_string(&user_template_path)?
     } else {
         DEFAULT_TEMPLATE.to_string()
